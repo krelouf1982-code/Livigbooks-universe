@@ -1,7 +1,5 @@
- // ============================================================
-// Living Books Universe v3.3 - Refactored with Provider
-// ============================================================
 
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:audioplayers/audioplayers.dart';
@@ -17,8 +15,14 @@ import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 
-void main() {
+import 'firebase_options.dart';
+import 'story_generator_screen.dart';
+
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
   SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,
@@ -32,6 +36,7 @@ void main() {
     ),
   );
 }
+
 
 // =================| Data Models |=================
 
@@ -64,9 +69,9 @@ class BookModel {
     return BookModel(
       id: map['id'],
       title: map['title'],
-      coverColor: Color(map['coverColor']),
+      coverColor: Color(map['coverColor'] as int),
       pages: (map['pages'] as String).split('|||'),
-      language: LanguageCode.values[map['language']],
+      language: LanguageCode.values[map['language'] as int],
     );
   }
 }
@@ -116,7 +121,9 @@ class DatabaseHelper {
   static Database? _database;
 
   Future<Database> get database async {
-    return _database ??= await _initDatabase();
+    if (_database != null) return _database!;
+    _database = await _initDatabase();
+    return _database!;
   }
 
   Future<Database> _initDatabase() async {
@@ -322,7 +329,7 @@ class TranslationService {
       final response = await http.post(
         Uri.parse('https://libretranslate.de/translate'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
+        body: json.encode({
           'q': text,
           'source': 'auto',
           'target': targetLang,
@@ -331,7 +338,7 @@ class TranslationService {
       ).timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
+        final data = json.decode(response.body);
         return data['translatedText'] ?? text;
       }
       return text;
@@ -350,7 +357,7 @@ class TranslationService {
 
 // =================| Language System |=================
 
-enum LanguageCode { ar, en, fr, es }
+enum LanguageCode { ar, en, fr, es, zh, hi, pt, ru, de, ja, ko, it, tr, ur }
 
 extension LangExt on LanguageCode {
   String get name {
@@ -359,15 +366,35 @@ extension LangExt on LanguageCode {
       case LanguageCode.en: return 'English';
       case LanguageCode.fr: return 'French';
       case LanguageCode.es: return 'Spanish';
+      case LanguageCode.zh: return 'Chinese';
+      case LanguageCode.hi: return 'Hindi';
+      case LanguageCode.pt: return 'Portuguese';
+      case LanguageCode.ru: return 'Russian';
+      case LanguageCode.de: return 'German';
+      case LanguageCode.ja: return 'Japanese';
+      case LanguageCode.ko: return 'Korean';
+      case LanguageCode.it: return 'Italian';
+      case LanguageCode.tr: return 'Turkish';
+      case LanguageCode.ur: return 'Urdu';
     }
   }
 
   String get ttsCode {
     switch (this) {
-      case LanguageCode.ar: return 'ar';
+      case LanguageCode.ar: return 'ar-SA';
       case LanguageCode.en: return 'en-US';
       case LanguageCode.fr: return 'fr-FR';
       case LanguageCode.es: return 'es-ES';
+      case LanguageCode.zh: return 'zh-CN';
+      case LanguageCode.hi: return 'hi-IN';
+      case LanguageCode.pt: return 'pt-PT';
+      case LanguageCode.ru: return 'ru-RU';
+      case LanguageCode.de: return 'de-DE';
+      case LanguageCode.ja: return 'ja-JP';
+      case LanguageCode.ko: return 'ko-KR';
+      case LanguageCode.it: return 'it-IT';
+      case LanguageCode.tr: return 'tr-TR';
+      case LanguageCode.ur: return 'ur-PK';
     }
   }
 
@@ -377,9 +404,20 @@ extension LangExt on LanguageCode {
       case LanguageCode.en: return 'en';
       case LanguageCode.fr: return 'fr';
       case LanguageCode.es: return 'es';
+      case LanguageCode.zh: return 'zh';
+      case LanguageCode.hi: return 'hi';
+      case LanguageCode.pt: return 'pt';
+      case LanguageCode.ru: return 'ru';
+      case LanguageCode.de: return 'de';
+      case LanguageCode.ja: return 'ja';
+      case LanguageCode.ko: return 'ko';
+      case LanguageCode.it: return 'it';
+      case LanguageCode.tr: return 'tr';
+      case LanguageCode.ur: return 'ur';
     }
   }
 }
+
 
 // =================| App State |=================
 
@@ -478,12 +516,10 @@ class UniverseController extends StatefulWidget {
 class _UniverseControllerState extends State<UniverseController> {
   final DatabaseHelper _db = DatabaseHelper();
   final AudioEngine _audio = AudioEngine();
-  final TranslationService _translator = TranslationService();
 
   List<BookModel> _libraryBooks = [];
   bool _isLoadingBooks = true;
   BookModel? _activeBook;
-  bool _isGeneratingDream = false;
 
   @override
   void initState() {
@@ -491,7 +527,7 @@ class _UniverseControllerState extends State<UniverseController> {
     _audio.init();
     _audio.playBackgroundMusic();
     _loadLibrary();
-    context.read<AppState>().checkAutoNightMode();
+    Provider.of<AppState>(context, listen: false).checkAutoNightMode();
   }
 
   @override
@@ -510,27 +546,8 @@ class _UniverseControllerState extends State<UniverseController> {
     }
   }
 
-  void _generateDreamBook() async {
-    setState(() => _isGeneratingDream = true);
-    await Future.delayed(const Duration(seconds: 3));
-
-    final dreamBook = BookModel(
-      title: "Your Dream Book",
-      coverColor: Colors.purple.shade900,
-      language: LanguageCode.en,
-      pages: ["In a distant world... your own legend was born.", "The beginning was just a dream.", "The dream came true and became reality."],
-    );
-
-    await _db.insertBook(dreamBook);
-    final updatedBooks = await _db.getBooks();
-
-    if (mounted) {
-      setState(() {
-        _isGeneratingDream = false;
-        _libraryBooks = updatedBooks;
-        _activeBook = dreamBook;
-      });
-    }
+  void _navigateToStoryGenerator() {
+    Navigator.push(context, MaterialPageRoute(builder: (_) => const StoryGeneratorScreen()));
   }
 
   Future<void> _uploadBook() async {
@@ -540,7 +557,7 @@ class _UniverseControllerState extends State<UniverseController> {
         allowedExtensions: ['txt'],
         withData: true,
       );
-      if (result == null) return;
+      if (result == null || !mounted) return;
 
       final file = result.files.first;
       final fileName = p.basename(file.name);
@@ -548,11 +565,9 @@ class _UniverseControllerState extends State<UniverseController> {
       if (bytes == null) return;
 
       if (!fileName.toLowerCase().endsWith('.txt')) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Unsupported file type. Please upload TXT only.')),
-          );
-        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Unsupported file type. Please upload TXT only.')),
+        );
         return;
       }
 
@@ -610,7 +625,7 @@ class _UniverseControllerState extends State<UniverseController> {
 
   @override
   Widget build(BuildContext context) {
-    final appState = context.watch<AppState>();
+    final appState = Provider.of<AppState>(context);
 
     return Scaffold(
       body: Stack(
@@ -646,7 +661,7 @@ class _UniverseControllerState extends State<UniverseController> {
               onOpenBook: (b) async {
                 setState(() => _activeBook = b);
               },
-              onDreamBook: _generateDreamBook,
+              onDreamBook: _navigateToStoryGenerator,
               onUploadBook: _uploadBook,
             )
           else
@@ -654,10 +669,9 @@ class _UniverseControllerState extends State<UniverseController> {
               book: _activeBook!,
               onClose: () => setState(() => _activeBook = null),
               audioEngine: _audio,
-              translationService: _translator,
+              translationService: TranslationService(),
               databaseHelper: _db,
             ),
-          if (_isGeneratingDream) const DreamBookGenerator(),
           Positioned(
             top: 40,
             right: 40,
@@ -751,45 +765,35 @@ class MuseumLibraryView extends StatelessWidget {
                 style: TextStyle(fontSize: 40, color: Color(0xFFD4AF37), fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 8),
-              ElevatedButton.icon(
-                onPressed: onUploadBook,
-                icon: const Icon(Icons.upload_file, color: Color(0xFFD4AF37)),
-                label: const Text("Upload Book", style: TextStyle(color: Color(0xFFD4AF37))),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.black54,
-                  side: const BorderSide(color: Color(0xFFD4AF37)),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  ElevatedButton.icon(
+                    onPressed: onUploadBook,
+                    icon: const Icon(Icons.upload_file, color: Color(0xFFD4AF37)),
+                    label: const Text("Upload Book", style: TextStyle(color: Color(0xFFD4AF37))),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.black54,
+                      side: const BorderSide(color: Color(0xFFD4AF37)),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                    ),
+                  ),
+                  const SizedBox(width: 20),
+                  ElevatedButton.icon(
+                    onPressed: onDreamBook,
+                    icon: const Icon(Icons.auto_awesome, color: Color(0xFFD4AF37)),
+                    label: const Text("Create with AI", style: TextStyle(color: Color(0xFFD4AF37))),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.black54,
+                      side: const BorderSide(color: Color(0xFFD4AF37)),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 10),
               const LanguageCompass(),
             ],
-          ),
-        ),
-        Positioned(
-          top: 230,
-          left: 0,
-          right: 0,
-          child: Center(
-            child: GestureDetector(
-              onTap: onDreamBook,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 15),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFD4AF37).withAlpha(51),
-                  border: Border.all(color: const Color(0xFFD4AF37), width: 2),
-                  borderRadius: BorderRadius.circular(30),
-                ),
-                child: const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.auto_fix_high, color: Color(0xFFD4AF37)),
-                    SizedBox(width: 10),
-                    Text("Generate Your Dream Story", style: TextStyle(color: Colors.white, fontSize: 18)),
-                  ],
-                ),
-              ),
-            ),
           ),
         ),
       ],
@@ -824,6 +828,7 @@ class MuseumLibraryView extends StatelessWidget {
   }
 }
 
+
 // =================| Language Compass |=================
 
 class LanguageCompass extends StatelessWidget {
@@ -831,7 +836,7 @@ class LanguageCompass extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final appState = context.watch<AppState>();
+    final appState = Provider.of<AppState>(context);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
       margin: const EdgeInsets.symmetric(horizontal: 40),
@@ -843,9 +848,9 @@ class LanguageCompass extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          _buildDropdown("Book Language", appState.bookLang, (l) => appState.setBookLang(l)),
+          _buildDropdown("Book Language", appState.bookLang, (l) => Provider.of<AppState>(context, listen: false).setBookLang(l)),
           const Icon(Icons.swap_horiz, color: Color(0xFFD4AF37)),
-          _buildDropdown("Translation", appState.transLang, (l) => appState.setTransLang(l)),
+          _buildDropdown("Translation", appState.transLang, (l) => Provider.of<AppState>(context, listen: false).setTransLang(l)),
         ],
       ),
     );
@@ -1019,7 +1024,7 @@ class _ImmersiveReaderViewState extends State<ImmersiveReaderView>
   }
 
   Future<void> _toggleTranslation() async {
-    final appState = context.read<AppState>();
+    final appState = Provider.of<AppState>(context, listen: false);
     if (_translatedText.isEmpty) {
       setState(() => _isTranslating = true);
       final text = widget.book.pages[_currentPage];
@@ -1039,7 +1044,7 @@ class _ImmersiveReaderViewState extends State<ImmersiveReaderView>
   }
   @override
   Widget build(BuildContext context) {
-    final appState = context.watch<AppState>();
+    final appState = Provider.of<AppState>(context);
     double angle = _isDragging ? _dragValue * math.pi : _dragController.value * math.pi;
     bool isArabic = appState.bookLang == LanguageCode.ar;
     double bookWidth = MediaQuery.of(context).size.width * 0.8;
@@ -1159,12 +1164,8 @@ class _ImmersiveReaderViewState extends State<ImmersiveReaderView>
                       child: AnimatedBuilder(
                         animation: _popUpController,
                         builder: (context, child) {
-                          return Transform(
-                            alignment: Alignment.center,
-                            transform: Matrix4.identity()
-                              ..setEntry(3, 2, 0.001)
-                              ..translate(0.0, 0.0, 50.0 * _popUpController.value)
-                              ..scale(0.5 + (_popUpController.value * 0.5)),
+                          return Transform.scale(
+                            scale: 0.5 + (_popUpController.value * 0.5),
                             child: Opacity(
                               opacity: _popUpController.value,
                               child: const Icon(Icons.local_fire_department, size: 80, color: Colors.deepOrange),
@@ -1281,7 +1282,7 @@ class _ImmersiveReaderViewState extends State<ImmersiveReaderView>
               GestureDetector(
                 onTap: () {
                   setState(() => _isRecording = !_isRecording);
-                  if (_isRecording) {
+                  if (_isRecording && mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(content: Text('Recording is under development...')),
                     );
@@ -1309,6 +1310,8 @@ class _ImmersiveReaderViewState extends State<ImmersiveReaderView>
               const SizedBox(width: 20),
               GestureDetector(
                 onTap: () async {
+                  if (!mounted) return;
+                  final appState = Provider.of<AppState>(context, listen: false);
                   if (appState.isNarrating) {
                     await widget.audioEngine.stopSpeaking();
                     appState.setNarrating(false);
@@ -1354,7 +1357,7 @@ class _ImmersiveReaderViewState extends State<ImmersiveReaderView>
               ),
               const SizedBox(width: 20),
               GestureDetector(
-                onTap: appState.toggleSlowNarration,
+                onTap: () => Provider.of<AppState>(context, listen: false).toggleSlowNarration(),
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 300),
                   width: 60,
@@ -1467,7 +1470,7 @@ class BookSimulatorScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final appState = context.watch<AppState>();
+    final appState = Provider.of<AppState>(context);
     return Scaffold(
       body: Stack(
         children: [
@@ -1851,43 +1854,6 @@ class IndexTabRail extends StatelessWidget {
   }
 }
 
-class DreamBookGenerator extends StatelessWidget {
-  const DreamBookGenerator({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      color: Colors.black.withAlpha(230),
-      child: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            ShaderMask(
-              shaderCallback: (b) => const LinearGradient(
-                colors: [Color(0xFFD4AF37), Colors.white, Color(0xFFD4AF37)],
-              ).createShader(b),
-              child: const Icon(Icons.auto_fix_high, size: 100, color: Colors.white),
-            ),
-            const SizedBox(height: 30),
-            const Text(
-              "AI is weaving your dreams...",
-              style: TextStyle(color: Colors.white, fontSize: 24, fontStyle: FontStyle.italic),
-            ),
-            const SizedBox(height: 20),
-            const SizedBox(
-              width: 200,
-              child: LinearProgressIndicator(
-                backgroundColor: Colors.transparent,
-                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFD4AF37)),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class RoomSwitcher extends StatelessWidget {
   final RoomType currentRoom;
   final ValueChanged<RoomType> onChanged;
@@ -1941,7 +1907,7 @@ class SettingsDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final appState = context.watch<AppState>();
+    final appState = Provider.of<AppState>(context);
     return AlertDialog(
       backgroundColor: const Color(0xFF2E1E14),
       title: const Text(
@@ -1960,7 +1926,7 @@ class SettingsDialog extends StatelessWidget {
                   min: 12,
                   max: 36,
                   divisions: 12,
-                  onChanged: (value) => context.read<AppState>().setFontSize(value),
+                  onChanged: (value) => Provider.of<AppState>(context, listen: false).setFontSize(value),
                   activeColor: const Color(0xFFD4AF37),
                 ),
               ),
@@ -1973,29 +1939,36 @@ class SettingsDialog extends StatelessWidget {
               const Text('Slow Narration:', style: TextStyle(color: Colors.white)),
               Switch(
                 value: appState.slowNarration,
-                onChanged: (_) => context.read<AppState>().toggleSlowNarration(),
+                onChanged: (_) => Provider.of<AppState>(context, listen: false).toggleSlowNarration(),
                 activeColor: const Color(0xFFD4AF37),
               ),
             ],
           ),
           const SizedBox(height: 10),
-          FutureBuilder<bool>(
-            future: SharedPreferences.getInstance().then((prefs) => prefs.getBool('autoNight') ?? false),
-            builder: (context, snapshot) {
-              if (!snapshot.hasData) return const SizedBox.shrink();
-              return Row(
-                children: [
-                  const Text('Auto Night Mode:', style: TextStyle(color: Colors.white)),
-                  Switch(
-                    value: snapshot.data!,
-                    onChanged: (value) async {
-                      final prefs = await SharedPreferences.getInstance();
-                      await prefs.setBool('autoNight', value);
-                      context.read<AppState>().checkAutoNightMode();
-                    },
-                    activeColor: const Color(0xFFD4AF37),
-                  ),
-                ],
+          StatefulBuilder(
+            builder: (context, setState) {
+              return FutureBuilder<bool>(
+                future: SharedPreferences.getInstance().then((prefs) => prefs.getBool('autoNight') ?? false),
+                builder: (context, snapshot) {
+                  if (!snapshot.hasData) return const SizedBox.shrink();
+                  return Row(
+                    children: [
+                      const Text('Auto Night Mode:', style: TextStyle(color: Colors.white)),
+                      Switch(
+                        value: snapshot.data!,
+                        onChanged: (value) async {
+                          final prefs = await SharedPreferences.getInstance();
+                          await prefs.setBool('autoNight', value);
+                          setState(() {});
+                           if(context.mounted){
+                             Provider.of<AppState>(context, listen: false).checkAutoNightMode();
+                          }
+                        },
+                        activeColor: const Color(0xFFD4AF37),
+                      ),
+                    ],
+                  );
+                },
               );
             },
           ),
